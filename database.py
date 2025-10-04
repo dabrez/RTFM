@@ -70,7 +70,7 @@ class Database:
 # Example usage
 if __name__ == "__main__":
     db = Database()
-    db.add_message("Alex said to meet at 3 PM", "Alex", "2025-10-04")
+'''    db.add_message("Alex said to meet at 3 PM", "Alex", "2025-10-04")
     db.add_message("Don't forget the meeting tomorrow", "Jamie", "2025-10-03")
     db.add_message("Fuck off", "Jamie", "2025-10-03")
 
@@ -79,4 +79,4 @@ if __name__ == "__main__":
 
 
     for content, metadata, confidence in query_results:
-        print(f"Content: {content}, Metadata: {metadata}, Confidence: {confidence:.7f}")
+        print(f"Content: {content}, Metadata: {metadata}, Confidence: {confidence:.7f}")'''
