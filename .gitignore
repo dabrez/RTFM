@@ -4,3 +4,19 @@
 *.cache
 *.log
 tmp/
+
+# ChromaDB database files
+discord_db/
+*.sqlite
+*.sqlite3
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Test files
+test_response_generation.py
