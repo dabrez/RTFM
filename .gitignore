@@ -1,0 +1,6 @@
+# Ignore environment variables and cache files
+.env
+/cache/
+*.cache
+*.log
+tmp/
