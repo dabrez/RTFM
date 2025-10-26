@@ -1,0 +1,35 @@
+version: '3.8'
+
+# ============================================================================
+# RTFM Discord Bot - Simple Docker Compose
+# ============================================================================
+# Works with current bot.py and database.py
+# Future: Expand to full microservices architecture
+# ============================================================================
+
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rtfm-bot
+    environment:
+      DISCORD_TOKEN: ${DISCORD_TOKEN}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_API_SECRET: ${GEMINI_API_SECRET}
+    volumes:
+      # Persist the ChromaDB database
+      - ./discord_db:/app/discord_db
+      # Persist logs (if you add file logging)
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  default:
+    name: rtfm-network
