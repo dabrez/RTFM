@@ -221,4 +221,4 @@ Future Task:
   ✓ Assign team roles
   ✓ Build scalable version
 
-Good luck with CruzHacks! 🚀
+
