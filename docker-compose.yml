@@ -1,11 +1,19 @@
 version: '3.8'
 
 # ============================================================================
-# RTFM Discord Bot - Simple Docker Compose
+# RTFM Discord Bot - Full Microservices Docker Compose
 # ============================================================================
-# Works with current bot.py and database.py
-# Future: Expand to full microservices architecture
-# ============================================================================
+
+networks:
+  rtfm-network:
+    driver: bridge
+
+volumes:
+  db_data:
+  redis_data:
+  chroma_data:
+  prometheus_data:
+  grafana_data:
 
 services:
   bot:
@@ -18,9 +26,7 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       GEMINI_API_SECRET: ${GEMINI_API_SECRET}
     volumes:
-      # Persist the ChromaDB database
       - ./discord_db:/app/discord_db
-      # Persist logs (if you add file logging)
       - ./logs:/app/logs
     restart: unless-stopped
     healthcheck:
@@ -29,7 +35,119 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+    networks:
+      - rtfm-network
 
-networks:
-  default:
-    name: rtfm-network
+  db:
+    image: postgres:13
+    restart: always
+    environment:
+      POSTGRES_DB: rtfm_db
+      POSTGRES_USER: rtfm_user
+      POSTGRES_PASSWORD: rtfm_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    networks:
+      - rtfm-network
+
+  redis:
+    image: redis:latest
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    restart: always
+    networks:
+      - rtfm-network
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    hostname: zookeeper
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - rtfm-network
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    hostname: kafka
+    container_name: kafka
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    networks:
+      - rtfm-network
+
+  chroma:
+    image: chromadb/chroma:latest
+    container_name: chroma
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - PERSIST_DIRECTORY=/chroma/chroma
+      - ANONYMIZED_TELEMETRY=FALSE
+      - CHROMA_SERVER_HOST=0.0.0.0
+      - CHROMA_SERVER_PORT=8000
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - rtfm-network
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    restart: unless-stopped
+    networks:
+      - rtfm-network
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SERVER_ROOT_URL=http://localhost:3000
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    networks:
+      - rtfm-network
