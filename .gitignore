@@ -18,5 +18,28 @@ __pycache__/
 .Python
 *.so
 
+
+
 # Test files
 test_response_generation.py
+
+
+# Local environment and secrets
+.env
+.flaskenv
+
+# Docker-related local files
+docker-compose.local.yml
+
+# Distribution and packaging
+build/
+dist/
+*.egg-info/
+
+data/
+
+# Tests and coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
