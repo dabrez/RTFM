@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Server History - RTFM Dashboard</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/water.css@2/out/water.css">
+    <style>
+        .query-box {
+            border: 1px solid #ccc;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            border-radius: 8px;
+        }
+        .meta {
+            font-size: 0.8rem;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <a href="/">Home</a> | <a href="/guilds">Servers</a> | <a href="/logout">Logout</a>
+    </header>
+    <h1>Bot Query History for Server {{ guild_id }}</h1>
+
+    {% for item in history %}
+        <div class="query-box">
+            <p><strong>Question:</strong> {{ item.question }}</p>
+            <p><strong>Response:</strong> {{ item.response }}</p>
+            <div class="meta">
+                Asked by {{ item.username }} on {{ item.timestamp }}
+            </div>
+        </div>
+    {% else %}
+        <p>No queries logged for this server yet.</p>
+    {% endfor %}
+</body>
+</html>

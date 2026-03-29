@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Managed Servers - RTFM Dashboard</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/water.css@2/out/water.css">
+</head>
+<body>
+    <header>
+        <a href="/">Home</a> | <a href="/logout">Logout</a>
+    </header>
+    <h1>Your Servers</h1>
+    <p>Select a server to view its bot query history.</p>
+    
+    <ul>
+    {% for guild in guilds %}
+        <li>
+            <strong>{{ guild.name }}</strong>
+            <a href="/guild/{{ guild.id }}"><button>View History</button></a>
+        </li>
+    {% else %}
+        <li>No managed servers found. Make sure you have Administrator permissions on the server.</li>
+    {% endfor %}
+    </ul>
+</body>
+</html>
