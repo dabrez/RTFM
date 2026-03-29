@@ -7,10 +7,6 @@ set -e
 
 echo "Starting RTFM Services..."
 
-# Run Diagnostics
-echo "Running environment diagnostics..."
-python diagnose_fastembed.py
-
 # Start Dashboard in the background
 echo "Starting Dashboard on port ${PORT:-8080}..."
 uvicorn dashboard.main:app --host 0.0.0.0 --port ${PORT:-8080} &

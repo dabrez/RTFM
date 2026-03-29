@@ -34,7 +34,7 @@ class DiscordRTFMBot:
         # Initialize Gemini
         if gemini_api_key:
             genai.configure(api_key=gemini_api_key)
-            self.model = genai.GenerativeModel('gemini-1.5-flash')
+            self.model = genai.GenerativeModel('gemini-3-flash-preview')
             self.circuit_breaker = CircuitBreaker("GeminiAPI")
         else:
             self.model = None
@@ -139,13 +139,17 @@ Chat History:
 
 Please provide a helpful and accurate response based on the information available in the chat history. If the information is insufficient, say so clearly."""
 
-            # Use CircuitBreaker for API call
+            # Use CircuitBreaker for API call with a 30s timeout and no internal library retries
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
-                None, 
-                lambda: self.circuit_breaker.call(self.model.generate_content, prompt)
+                None,
+                lambda: self.circuit_breaker.call(
+                    self.model.generate_content, 
+                    prompt,
+                    request_options={"timeout": 30},
+                    retry=None
+                )
             )
-            
             response_text = response.text
 
             # 4. Store in Cache
