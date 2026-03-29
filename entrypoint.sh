@@ -1,28 +1,19 @@
 #!/bin/bash
 # ============================================================================
-# RTFM Discord Bot - Docker Entrypoint
+# RTFM Discord Bot - Docker Entrypoint (Simplified)
 # ============================================================================
 
 set -e
 
-echo "Starting RTFM Bot..."
+echo "Starting RTFM Services..."
 
-# Wait for Kafka to be ready
-echo "Waiting for Kafka to be ready..."
-until python -c "from kafka import KafkaAdminClient; KafkaAdminClient(bootstrap_servers='kafka:9092').list_topics()" 2>/dev/null; do
-    echo "Kafka is unavailable - sleeping"
-    sleep 5
-done
+# Start Dashboard in the background
+echo "Starting Dashboard on port ${PORT:-8080}..."
+uvicorn dashboard.main:app --host 0.0.0.0 --port ${PORT:-8080} &
 
-echo "Kafka is ready!"
+# Start Bot in the foreground
+echo "Starting Discord Bot..."
+python bot.py
 
-# Initialize Kafka topics if this is the message processor
-if [ "$1" = "message_processor.py" ]; then
-    echo "Initializing Kafka topics..."
-    python init_kafka_topics.py --bootstrap-servers kafka:9092 --action create || true
-    echo "Kafka topics initialized"
-fi
-
-# Execute the command
-echo "Starting application: $@"
-exec python "$@"
+# Wait for all background processes to finish
+wait

@@ -1,0 +1,11 @@
+.git
+.gitignore
+.claude
+history.txt
+README.md
+docker-compose.yml
+discord_db/
+logs/
+__pycache__/
+*.pyc
+.env

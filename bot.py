@@ -6,10 +6,11 @@ import asyncio
 import uuid
 import logging
 import time
-from kafka_producer import RTFMKafkaProducer
-from kafka_consumer import BotResponseConsumer
-from utils import Metrics
-import threading
+from typing import Optional
+import google.generativeai as genai
+
+from database import Database, PostgresDatabase, CacheManager
+from utils import CircuitBreaker
 
 logging.basicConfig(
     level=logging.INFO,
@@ -21,190 +22,164 @@ logger = logging.getLogger(__name__)
 class DiscordRTFMBot:
     TRIGGER_PHRASE = ["rtfm", "RTFM", "Rtfm", "Read The F***ing Manual"]
 
-
-    def __init__(self, bot_token, kafka_bootstrap_servers="kafka:9092"):
+    def __init__(self, bot_token, gemini_api_key=None):
         # Load tokens
         self.BOT_TOKEN = bot_token
 
-        # Initialize Kafka producer
-        self.kafka_producer = RTFMKafkaProducer(kafka_bootstrap_servers)
-
-        # Initialize metrics
-        self.metrics = Metrics(port=8000)
+        # Initialize databases
+        self.db = Database()
+        self.postgres = PostgresDatabase()
+        self.cache = CacheManager()
+        
+        # Initialize Gemini
+        if gemini_api_key:
+            genai.configure(api_key=gemini_api_key)
+            self.model = genai.GenerativeModel('gemini-1.5-flash')
+            self.circuit_breaker = CircuitBreaker("GeminiAPI")
+        else:
+            self.model = None
+            logger.warning("No Gemini API key provided - AI responses disabled")
 
         # Discord client
         intents = discord.Intents.default()
         intents.message_content = True
         self.client = discord.Client(intents=intents)
 
-        # Channel references for sending responses
-        self.channels = {}
-
-        # Pending queries (to track responses)
-        self.pending_queries = {}
-
-        # Start response consumer in background
-        self.response_consumer = BotResponseConsumer(kafka_bootstrap_servers)
-        self.response_thread = self.response_consumer.consume_async(
-            self.handle_bot_response,
-            self.handle_consumer_error
-        )
-
         # Register events
         self.client.event(self.on_ready)
         self.client.event(self.on_message)
 
-
-    def handle_bot_response(self, response: dict):
-        """
-        Handle bot responses from Kafka
-
-        This is called by the Kafka consumer when a response is ready.
-        """
-        try:
-            channel_id = int(response['channel_id'])
-            response_text = response['response_text']
-
-            logger.info(f"Received response for channel {channel_id}")
-
-            # Update metrics
-            self.metrics.messages_processed.labels(topic="bot-responses", status="success").inc()
-
-            # Schedule sending the message in the Discord event loop
-            asyncio.run_coroutine_threadsafe(
-                self._send_response(channel_id, response_text),
-                self.client.loop
-            )
-
-        except Exception as e:
-            logger.error(f"Error handling bot response: {e}", exc_info=True)
-            self.metrics.errors.labels(type="bot_response_handling").inc()
-            
-            # Send to DLQ
-            self.kafka_producer.send_to_dlq("bot-responses", response, str(e))
-
-    async def _send_response(self, channel_id: int, response_text: str):
-        """
-        Send a response to a Discord channel
-
-        Args:
-            channel_id: Discord channel ID
-            response_text: Response text to send
-        """
-        try:
-            channel = self.client.get_channel(channel_id)
-            if channel:
-                await channel.send(response_text)
-                logger.info(f"Sent response to channel {channel_id}")
-            else:
-                logger.error(f"Channel {channel_id} not found")
-        except Exception as e:
-            logger.error(f"Error sending response to channel {channel_id}: {e}")
-
-    def handle_consumer_error(self, error: Exception):
-        """Handle errors from the Kafka consumer"""
-        logger.error(f"Kafka consumer error: {error}", exc_info=True)
-        self.metrics.errors.labels(type="kafka_consumer").inc()
-
-
     async def on_ready(self):
         logger.info(f'Logged in as {self.client.user}')
-
 
     async def on_message(self, message):
         if message.author == self.client.user:
             return
 
-        start_time = time.time()
-        try:
-            # Get message details
-            message_creation_time = message.created_at
-            formatted_time = message_creation_time.isoformat()
+        # 1. Store message in ChromaDB asynchronously
+        asyncio.create_task(self._store_message(message))
 
-            # Send message to discord-messages topic
-            message_data = {
-                "message_id": str(message.id),
-                "content": message.content,
-                "username": str(message.author),
-                "user_id": str(message.author.id),
-                "channel_id": str(message.channel.id),
-                "timestamp": formatted_time,
-                "metadata": {
-                    "channel_name": message.channel.name if hasattr(message.channel, 'name') else "DM"
-                }
-            }
+        # 2. Check for trigger phrase
+        if any(phrase.lower() in message.content.lower() for phrase in self.TRIGGER_PHRASE):
+            logger.info(f"Trigger phrase detected in message: {message.content}")
 
-            success = self.kafka_producer.send_discord_message(message_data)
-            
-            if success:
-                logger.info(
-                    f"[{formatted_time}] [{message.channel}] {message.author}: "
-                    f"{message.content[:50]}..."
-                )
-                self.metrics.messages_processed.labels(topic="discord-messages", status="success").inc()
+            # Remove trigger phrase to extract question
+            question = message.content
+            for phrase in self.TRIGGER_PHRASE:
+                question = question.replace(phrase, "").strip()
+
+            if question:
+                # Start typing indicator
+                async with message.channel.typing():
+                    # Process query and get response
+                    response_text = await self._process_query(message, question)
+                    await message.channel.send(response_text)
             else:
-                self.metrics.messages_processed.labels(topic="discord-messages", status="error").inc()
+                await message.channel.send(
+                    "Please ask a specific question after the trigger phrase so I can help you find relevant information from the chat history."
+                )
 
-            self.metrics.processing_latency.labels(topic="discord-messages").observe(time.time() - start_time)
+    async def _store_message(self, message):
+        """Store message in ChromaDB"""
+        try:
+            # message.created_at is naive UTC in discord.py if not specified
+            timestamp = message.created_at.isoformat()
+            
+            # Use the local ChromaDB via Database class
+            self.db.add_message(
+                content=message.content,
+                username=str(message.author),
+                guild_id=str(message.guild.id) if message.guild else "DM",
+                date=timestamp
+            )
+            logger.debug(f"Stored message {message.id} from {message.author}")
+        except Exception as e:
+            logger.error(f"Error storing message: {e}")
 
-            # Check for trigger phrase
-            if any(phrase.lower() in message.content.lower() for phrase in self.TRIGGER_PHRASE):
-                logger.info(f"Trigger phrase detected in message: {message.content}")
+    async def _process_query(self, message, question: str) -> str:
+        """Handle query logic: Cache -> ChromaDB -> Gemini"""
+        try:
+            guild_id = str(message.guild.id) if message.guild else "DM"
+            
+            # 1. Check Redis cache
+            cached_response = self.cache.get_response(question)
+            if cached_response:
+                logger.info("Found response in cache")
+                return f"[Cached] {cached_response}"
 
-                # Remove trigger phrase to extract question
-                question = message.content
-                for phrase in self.TRIGGER_PHRASE:
-                    question = question.replace(phrase, "").strip()
+            # 2. Query ChromaDB for context
+            if not self.model:
+                return "AI responses are currently disabled (no API key configured)."
 
-                if question:
-                    # Send query to bot-queries topic
-                    query_id = str(uuid.uuid4())
-                    query_data = {
-                        "query_id": query_id,
-                        "original_message_id": str(message.id),
-                        "question": question,
-                        "username": str(message.author),
-                        "user_id": str(message.author.id),
-                        "channel_id": str(message.channel.id),
-                        "timestamp": datetime.utcnow().isoformat(),
-                        "context": {}
-                    }
+            query_results = self.db.query(
+                question,
+                guild_id=guild_id,
+                k=10,
+                min_confidence=0.3,
+                max_results=5
+            )
 
-                    q_success = self.kafka_producer.send_bot_query(query_data)
-                    if q_success:
-                        logger.info(f"Sent query to Kafka: {question}")
-                        self.metrics.messages_processed.labels(topic="bot-queries", status="success").inc()
-                    else:
-                        self.metrics.messages_processed.labels(topic="bot-queries", status="error").inc()
+            if not query_results:
+                return "I couldn't find any relevant information in the chat history to answer your question."
 
-                else:
-                    await message.channel.send(
-                        "Please ask a specific question after the trigger phrase so I can help you find relevant information from the chat history."
-                    )
+            # Prepare context
+            context = ""
+            for content, metadata, confidence in query_results:
+                context += f"[{metadata['date']}] {metadata['username']}: {content}\n"
+
+            # 3. Generate response with Gemini
+            prompt = f"""Based on the following Discord chat history, please answer the question: "{question}"
+
+Chat History:
+{context}
+
+Please provide a helpful and accurate response based on the information available in the chat history. If the information is insufficient, say so clearly."""
+
+            # Use CircuitBreaker for API call
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None, 
+                lambda: self.circuit_breaker.call(self.model.generate_content, prompt)
+            )
+            
+            response_text = response.text
+
+            # 4. Store in Cache
+            self.cache.set_response(question, response_text)
+
+            # 5. Log to Postgres
+            query_id = str(uuid.uuid4())
+            self.postgres.log_query(
+                query_id=query_id,
+                question=question,
+                response=response_text,
+                username=str(message.author),
+                user_id=str(message.author.id),
+                guild_id=guild_id,
+                channel_id=str(message.channel.id)
+            )
+
+            return response_text
 
         except Exception as e:
-            logger.error(f"Error processing message: {e}", exc_info=True)
-            self.metrics.errors.labels(type="message_processing").inc()
-            
-            # Send to DLQ
-            self.kafka_producer.send_to_dlq("discord-messages-inbound", {"content": message.content}, str(e))
-
+            logger.error(f"Error processing query: {e}", exc_info=True)
+            return f"Sorry, I encountered an error: {str(e)}"
 
     def run(self):
         try:
             self.client.run(self.BOT_TOKEN)
-        finally:
-            # Cleanup
-            self.response_consumer.stop()
-            self.kafka_producer.close()
-            logger.info("Bot shutdown complete")
+        except Exception as e:
+            logger.error(f"Bot failed to start: {e}")
 
 
 if __name__ == "__main__":
-    # Load environment variables
     load_dotenv()
     BOT_TOKEN = os.getenv("DISCORD_TOKEN")
-    KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-    bot = DiscordRTFMBot(BOT_TOKEN, KAFKA_BOOTSTRAP_SERVERS)
+    if not BOT_TOKEN:
+        logger.error("DISCORD_TOKEN not found in environment variables")
+        exit(1)
+
+    bot = DiscordRTFMBot(BOT_TOKEN, GEMINI_API_KEY)
     bot.run()
