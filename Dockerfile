@@ -29,6 +29,11 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
+# Pre-download the embedding model
+# We'll set the cache path so both stages know where it is
+ENV FASTEMBED_CACHE_PATH=/app/model_cache
+RUN python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5')"
+
 # ============================================================================ 
 # Stage 2: Final Image
 # ============================================================================ 
@@ -45,6 +50,9 @@ WORKDIR /app
 # Copy the virtual environment
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
+
+# Copy the pre-downloaded model
+COPY --from=builder /app/model_cache /app/model_cache
 
 # Copy application files
 COPY bot.py .
@@ -63,6 +71,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Make entrypoint executable
 RUN chmod +x /app/entrypoint.sh
+
+# Validation script
+COPY validate_model.py .
+RUN python validate_model.py
 
 # Create directories for database and logs
 RUN mkdir -p /app/discord_db /app/logs

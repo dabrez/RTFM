@@ -134,9 +134,11 @@ class Database:
             logger.info("FastEmbed initialized successfully")
             
         except ImportError as e:
-            logger.error(f"FastEmbed not installed: {e}. Semantic search will be disabled.")
+            logger.error(f"FastEmbed not installed: {e}")
+            raise RuntimeError(f"FastEmbed not installed: {e}")
         except Exception as e:
-            logger.error(f"Failed to initialize FastEmbed model '{model_name}': {e}. Semantic search will be disabled.")
+            logger.error(f"Failed to initialize FastEmbed model '{model_name}': {e}")
+            raise RuntimeError(f"Failed to initialize FastEmbed model '{model_name}': {e}")
 
         # Default persist directory
         if persist_directory is None:
