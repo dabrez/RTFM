@@ -1,18 +1,81 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>RTFM Bot Dashboard</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/water.css@2/out/water.css">
+    <style>
+        .hero {
+            text-align: center;
+            padding: 2rem 0;
+            background: #1a1a1a;
+            border-radius: 8px;
+            margin-bottom: 2rem;
+        }
+        .add-button {
+            background-color: #5865F2;
+            color: white !important;
+            padding: 1rem 2rem;
+            font-size: 1.2rem;
+            text-decoration: none;
+            border-radius: 5px;
+            display: inline-block;
+            margin: 1rem 0;
+        }
+        .add-button:hover {
+            background-color: #4752c4;
+        }
+        .card {
+            border: 1px solid #444;
+            padding: 1.5rem;
+            border-radius: 8px;
+            margin-top: 2rem;
+        }
+        code {
+            background: #333;
+            padding: 0.2rem 0.4rem;
+            border-radius: 4px;
+        }
+    </style>
 </head>
 <body>
-    <h1>RTFM Bot Dashboard</h1>
-    {% if user %}
-        <p>Welcome, {{ user.username }}!</p>
-        <a href="/guilds"><button>Manage Servers</button></a>
-        <a href="/logout"><button>Logout</button></a>
-    {% else %}
-        <p>Login to see your server's bot history.</p>
-        <a href="/login"><button>Login with Discord</button></a>
-    {% endif %}
+    <div class="hero">
+        <h1>RTFM Bot</h1>
+        <p>AI-powered Discord Chat Memory. Never lose a conversation again.</p>
+        
+        {% if client_id %}
+        <a href="https://discord.com/api/oauth2/authorize?client_id={{ client_id }}&permissions=8&scope=bot%20applications.commands" target="_blank" class="add-button">
+            Add to Discord
+        </a>
+        {% else %}
+        <p><em>Note: Bot Client ID not configured. Please check .env file.</em></p>
+        {% endif %}
+    </div>
+
+    <main>
+        <section>
+            <h2>How to Use RTFM</h2>
+            <ol>
+                <li><strong>Add the bot</strong> to your server using the button above.</li>
+                <li>Ensure the bot has permissions to <strong>view channels</strong> and <strong>read message history</strong>.</li>
+                <li>The bot will automatically start indexing new messages.</li>
+                <li><strong>Ask a question</strong> by typing <code>RTFM [your question]</code>.</li>
+                <p>Example: <code>RTFM what was the conclusion of yesterday's meeting?</code></p>
+            </ol>
+        </section>
+
+        <div class="card">
+            <h2>Manage Your Servers</h2>
+            {% if user %}
+                <p>Welcome back, <strong>{{ user.username }}</strong>!</p>
+                <a href="/guilds"><button>View Query History</button></a>
+                <a href="/logout"><button>Logout</button></a>
+            {% else %}
+                <p>Login with your Discord account to see the query history for the servers you manage.</p>
+                <a href="/login"><button>Login with Discord</button></a>
+            {% endif %}
+        </div>
+    </main>
 </body>
 </html>

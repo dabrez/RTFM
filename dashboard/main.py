@@ -36,7 +36,11 @@ postgres = PostgresDatabase()
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     user = request.session.get("user")
-    return templates.TemplateResponse("index.html", {"request": request, "user": user})
+    return templates.TemplateResponse("index.html", {
+        "request": request, 
+        "user": user,
+        "client_id": CLIENT_ID
+    })
 
 @app.get("/login")
 async def login():
