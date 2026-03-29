@@ -57,6 +57,8 @@ COPY dashboard/ dashboard/
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
     libpq5 \
+    libstdc++6 \
+    libatomic1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Make entrypoint executable

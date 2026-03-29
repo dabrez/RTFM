@@ -118,12 +118,15 @@ class CacheManager:
         self.redis.set(f"q:{question}", response, ex=ttl)
 
 class Database:
-    def __init__(self, persist_directory=None, model_name="sentence-transformers/all-MiniLM-L6-v2"):
+    def __init__(self, persist_directory=None, model_name="BAAI/bge-small-en-v1.5"):
         import chromadb
         try:
+            # Check if fastembed is installed first
+            import fastembed
             from chromadb.utils.embedding_functions import FastEmbedEmbeddingFunction
-        except ImportError:
-            logger.error("FastEmbedEmbeddingFunction not found in chromadb.utils.embedding_functions. Please update chromadb to 0.4.20 or later.")
+        except ImportError as e:
+            logger.error(f"FastEmbed integration error: {e}. Make sure 'fastembed' is installed and your system has necessary libraries (libgomp1).")
+            # Fallback to default if possible or raise
             raise
 
         # Default persist directory
