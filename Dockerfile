@@ -29,9 +29,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Pre-download sentence-transformers model
-ENV TRANSFORMERS_CACHE=/app/model_cache
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
+# Pre-download fastembed model
+ENV FASTEMBED_CACHE_PATH=/app/model_cache
+RUN python -c "from fastembed import TextEmbedding; list(TextEmbedding(model_name='sentence-transformers/all-MiniLM-L6-v2').embed(['hello']))"
 
 # ============================================================================ 
 # Stage 2: Final Image
@@ -51,8 +51,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy pre-downloaded model cache
 COPY --from=builder /app/model_cache /app/model_cache
-ENV TRANSFORMERS_CACHE=/app/model_cache
-ENV SENTENCE_TRANSFORMERS_HOME=/app/model_cache
+ENV FASTEMBED_CACHE_PATH=/app/model_cache
 
 # Copy application files
 COPY bot.py .
@@ -61,7 +60,7 @@ COPY utils.py .
 COPY entrypoint.sh .
 COPY dashboard/ dashboard/
 
-# Install runtime dependencies (e.g., for torch and postgres)
+# Install runtime dependencies (e.g., for fastembed/onnx and postgres)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
     libpq5 \

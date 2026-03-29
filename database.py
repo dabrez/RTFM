@@ -1,5 +1,5 @@
 from langchain_community.vectorstores import Chroma
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.embeddings.fastembed import FastEmbedEmbeddings
 import redis
 import json
 import psycopg2
@@ -134,7 +134,7 @@ class Database:
                 logger.error(f"Failed to create directory {persist_directory}: {e}")
 
         # Initialize embeddings
-        self.embeddings = HuggingFaceEmbeddings(model_name=model_name)
+        self.embeddings = FastEmbedEmbeddings(model_name=model_name)
         # Initialize Chroma vector database
         self.vector_db = Chroma(persist_directory=persist_directory, embedding_function=self.embeddings)
 
