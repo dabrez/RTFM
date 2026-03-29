@@ -11,13 +11,15 @@ This service consumes messages from Kafka and processes them:
 import logging
 import signal
 import sys
+import time
 from datetime import datetime
 from typing import Optional
 import uuid
 
-from database import Database
+from database import Database, PostgresDatabase, CacheManager
 from kafka_consumer import DiscordMessageConsumer, BotQueryConsumer, MultiConsumerManager
 from kafka_producer import RTFMKafkaProducer
+from utils import Metrics, CircuitBreaker
 import google.generativeai as genai
 import os
 from dotenv import load_dotenv
@@ -44,8 +46,12 @@ class MessageProcessor:
         gemini_api_key: Optional[str] = None
     ):
         self.db = Database()
+        self.postgres = PostgresDatabase()
+        self.cache = CacheManager()
         self.producer = RTFMKafkaProducer(kafka_bootstrap_servers)
         self.consumer_manager = MultiConsumerManager()
+        self.metrics = Metrics(port=8001)
+        self.circuit_breaker = CircuitBreaker("GeminiAPI")
 
         # Initialize Gemini
         if gemini_api_key:
@@ -72,6 +78,7 @@ class MessageProcessor:
         Args:
             message: Dictionary containing message data
         """
+        start_time = time.time()
         try:
             logger.info(
                 f"Processing Discord message from {message['username']}: "
@@ -86,9 +93,18 @@ class MessageProcessor:
             )
 
             logger.info(f"Stored message {message['message_id']} in database")
+            
+            # Update metrics
+            self.metrics.messages_processed.labels(topic="discord-messages", status="success").inc()
+            self.metrics.processing_latency.labels(topic="discord-messages").observe(time.time() - start_time)
 
         except Exception as e:
             logger.error(f"Error processing Discord message: {e}", exc_info=True)
+            self.metrics.messages_processed.labels(topic="discord-messages", status="error").inc()
+            self.metrics.errors.labels(type="discord_message_processing").inc()
+            
+            # Send to DLQ
+            self.producer.send_to_dlq("discord-messages", message, str(e))
 
     def process_bot_query(self, query: dict):
         """
@@ -97,6 +113,7 @@ class MessageProcessor:
         Args:
             query: Dictionary containing query data
         """
+        start_time = time.time()
         try:
             logger.info(
                 f"Processing bot query from {query['username']}: "
@@ -119,16 +136,35 @@ class MessageProcessor:
                 }
             }
 
+            # Log to Postgres
+            self.postgres.log_query(
+                query_id=query['query_id'],
+                question=query['question'],
+                response=response_text,
+                username=query['username'],
+                user_id=query['user_id'],
+                channel_id=query['channel_id']
+            )
+
             # Send to bot-responses topic
             success = self.producer.send_bot_response(response_data)
 
             if success:
                 logger.info(f"Generated and sent response for query {query['query_id']}")
+                self.metrics.messages_processed.labels(topic="bot-queries", status="success").inc()
             else:
                 logger.error(f"Failed to send response for query {query['query_id']}")
+                self.metrics.messages_processed.labels(topic="bot-queries", status="error").inc()
+
+            self.metrics.processing_latency.labels(topic="bot-queries").observe(time.time() - start_time)
 
         except Exception as e:
             logger.error(f"Error processing bot query: {e}", exc_info=True)
+            self.metrics.messages_processed.labels(topic="bot-queries", status="error").inc()
+            self.metrics.errors.labels(type="bot_query_processing").inc()
+            
+            # Send to DLQ
+            self.producer.send_to_dlq("bot-queries", query, str(e))
 
     def _generate_ai_response(self, question: str) -> str:
         """
@@ -143,6 +179,15 @@ class MessageProcessor:
         try:
             if not self.model:
                 return "AI responses are currently disabled (no API key configured)."
+
+            # Check cache
+            cached_response = self.cache.get_response(question)
+            if cached_response:
+                logger.info("Found response in cache")
+                self.metrics.cache_hits.inc()
+                return cached_response
+            
+            self.metrics.cache_misses.inc()
 
             # Query the database for relevant messages
             query_results = self.db.query(
@@ -168,13 +213,19 @@ Chat History:
 
 Please provide a helpful and accurate response based on the information available in the chat history. If the information is insufficient, say so clearly."""
 
-            # Generate response using Gemini
-            response = self.model.generate_content(prompt)
-            return response.text
+            # Generate response using Gemini wrapped in Circuit Breaker
+            response = self.circuit_breaker.call(self.model.generate_content, prompt)
+            
+            response_text = response.text
+            
+            # Cache the response
+            self.cache.set_response(question, response_text)
+            
+            return response_text
 
         except Exception as e:
             logger.error(f"Error generating AI response: {e}")
-            return "Sorry, I encountered an error while trying to answer your question."
+            return f"Sorry, I encountered an error while trying to answer your question. (Error: {str(e)})"
 
     def handle_error(self, error: Exception):
         """Handle consumer errors"""

@@ -1,6 +1,101 @@
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
+import redis
+import json
+import psycopg2
+from psycopg2.extras import RealDictCursor
+import logging
+import os
+import time
 
+logger = logging.getLogger(__name__)
+
+class PostgresDatabase:
+    """Postgres database for structured data (query history)"""
+    
+    def __init__(self):
+        self.host = os.getenv("POSTGRES_HOST", "db")
+        self.port = os.getenv("POSTGRES_PORT", "5432")
+        self.dbname = os.getenv("POSTGRES_DB", "rtfm_db")
+        self.user = os.getenv("POSTGRES_USER", "rtfm_user")
+        self.password = os.getenv("POSTGRES_PASSWORD", "rtfm_password")
+        self.conn = None
+        self._setup_db()
+
+    def _get_conn(self):
+        if self.conn is None or self.conn.closed != 0:
+            try:
+                self.conn = psycopg2.connect(
+                    host=self.host,
+                    port=self.port,
+                    dbname=self.dbname,
+                    user=self.user,
+                    password=self.password
+                )
+                self.conn.autocommit = True
+            except Exception as e:
+                logger.error(f"Failed to connect to Postgres: {e}")
+                return None
+        return self.conn
+
+    def _setup_db(self):
+        conn = self._get_conn()
+        if not conn:
+            return
+        
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS query_history (
+                    id SERIAL PRIMARY KEY,
+                    query_id VARCHAR(50) UNIQUE,
+                    question TEXT,
+                    response TEXT,
+                    username VARCHAR(100),
+                    user_id VARCHAR(50),
+                    channel_id VARCHAR(50),
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+    def log_query(self, query_id, question, response, username, user_id, channel_id):
+        conn = self._get_conn()
+        if not conn:
+            return
+        
+        with conn.cursor() as cur:
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO query_history (query_id, question, response, username, user_id, channel_id)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (query_id) DO NOTHING
+                    """,
+                    (query_id, question, response, username, user_id, channel_id)
+                )
+            except Exception as e:
+                logger.error(f"Error logging query to Postgres: {e}")
+
+class CacheManager:
+    """Redis cache manager for AI responses"""
+    
+    def __init__(self, host="redis", port=6379, db=0):
+        try:
+            self.redis = redis.Redis(host=host, port=port, db=db, decode_responses=True)
+            self.redis.ping()
+            logger.info(f"Connected to Redis at {host}:{port}")
+        except Exception as e:
+            logger.warning(f"Failed to connect to Redis: {e}")
+            self.redis = None
+
+    def get_response(self, question: str) -> str:
+        if not self.redis:
+            return None
+        return self.redis.get(f"q:{question}")
+
+    def set_response(self, question: str, response: str, ttl: int = 3600):
+        if not self.redis:
+            return
+        self.redis.set(f"q:{question}", response, ex=ttl)
 
 class Database:
     def __init__(self, persist_directory="./discord_db", model_name="sentence-transformers/all-MiniLM-L6-v2"):

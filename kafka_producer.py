@@ -28,6 +28,7 @@ class RTFMKafkaProducer:
     TOPIC_DISCORD_MESSAGES = "discord-messages"
     TOPIC_BOT_QUERIES = "bot-queries"
     TOPIC_BOT_RESPONSES = "bot-responses"
+    TOPIC_DLQ = "dead-letter-queue"
 
     def __init__(self, bootstrap_servers: str = "kafka:9092"):
         """
@@ -48,13 +49,41 @@ class RTFMKafkaProducer:
                 value_serializer=lambda v: json.dumps(v).encode('utf-8'),
                 key_serializer=lambda k: k.encode('utf-8') if k else None,
                 acks='all',  # Wait for all replicas to acknowledge
-                retries=3,
+                retries=5,    # Increased retries for reliability
+                enable_idempotence=True,  # Ensure exactly-once delivery
+                compression_type='gzip',   # Reduce bandwidth
                 max_in_flight_requests_per_connection=1
             )
             logger.info(f"Connected to Kafka broker at {self.bootstrap_servers}")
         except KafkaError as e:
             logger.error(f"Failed to connect to Kafka: {e}")
             raise
+
+    def send_to_dlq(
+        self,
+        original_topic: str,
+        message_data: dict,
+        error_message: str
+    ) -> bool:
+        """
+        Send a failed message to the Dead Letter Queue
+
+        Args:
+            original_topic: Topic where the message failed
+            message_data: Original message data
+            error_message: Description of the error
+
+        Returns:
+            True if sent successfully, False otherwise
+        """
+        dlq_data = {
+            "original_topic": original_topic,
+            "message": message_data,
+            "error": error_message,
+            "timestamp": json.dumps(message_data.get('timestamp')) if 'timestamp' in message_data else None
+        }
+        logger.warning(f"Sending message from {original_topic} to DLQ: {error_message}")
+        return self._send_message(self.TOPIC_DLQ, dlq_data)
 
     def send_discord_message(
         self,

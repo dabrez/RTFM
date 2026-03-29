@@ -58,6 +58,15 @@ def create_topics(bootstrap_servers: str = "kafka:9092", retries: int = 5):
                 "retention.ms": "86400000",  # 1 day
                 "cleanup.policy": "delete"
             }
+        ),
+        NewTopic(
+            name="dead-letter-queue",
+            num_partitions=3,
+            replication_factor=1,
+            topic_configs={
+                "retention.ms": "604800000",  # 7 days
+                "cleanup.policy": "delete"
+            }
         )
     ]
 
@@ -147,7 +156,8 @@ def delete_topics(bootstrap_servers: str = "kafka:9092"):
         topics_to_delete = [
             "discord-messages",
             "bot-queries",
-            "bot-responses"
+            "bot-responses",
+            "dead-letter-queue"
         ]
 
         result = admin_client.delete_topics(topics_to_delete)

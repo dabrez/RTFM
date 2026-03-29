@@ -5,8 +5,10 @@ from dotenv import load_dotenv
 import asyncio
 import uuid
 import logging
+import time
 from kafka_producer import RTFMKafkaProducer
 from kafka_consumer import BotResponseConsumer
+from utils import Metrics
 import threading
 
 logging.basicConfig(
@@ -26,6 +28,9 @@ class DiscordRTFMBot:
 
         # Initialize Kafka producer
         self.kafka_producer = RTFMKafkaProducer(kafka_bootstrap_servers)
+
+        # Initialize metrics
+        self.metrics = Metrics(port=8000)
 
         # Discord client
         intents = discord.Intents.default()
@@ -62,6 +67,9 @@ class DiscordRTFMBot:
 
             logger.info(f"Received response for channel {channel_id}")
 
+            # Update metrics
+            self.metrics.messages_processed.labels(topic="bot-responses", status="success").inc()
+
             # Schedule sending the message in the Discord event loop
             asyncio.run_coroutine_threadsafe(
                 self._send_response(channel_id, response_text),
@@ -70,6 +78,10 @@ class DiscordRTFMBot:
 
         except Exception as e:
             logger.error(f"Error handling bot response: {e}", exc_info=True)
+            self.metrics.errors.labels(type="bot_response_handling").inc()
+            
+            # Send to DLQ
+            self.kafka_producer.send_to_dlq("bot-responses", response, str(e))
 
     async def _send_response(self, channel_id: int, response_text: str):
         """
@@ -92,6 +104,7 @@ class DiscordRTFMBot:
     def handle_consumer_error(self, error: Exception):
         """Handle errors from the Kafka consumer"""
         logger.error(f"Kafka consumer error: {error}", exc_info=True)
+        self.metrics.errors.labels(type="kafka_consumer").inc()
 
 
     async def on_ready(self):
@@ -102,6 +115,7 @@ class DiscordRTFMBot:
         if message.author == self.client.user:
             return
 
+        start_time = time.time()
         try:
             # Get message details
             message_creation_time = message.created_at
@@ -120,11 +134,18 @@ class DiscordRTFMBot:
                 }
             }
 
-            self.kafka_producer.send_discord_message(message_data)
-            logger.info(
-                f"[{formatted_time}] [{message.channel}] {message.author}: "
-                f"{message.content[:50]}..."
-            )
+            success = self.kafka_producer.send_discord_message(message_data)
+            
+            if success:
+                logger.info(
+                    f"[{formatted_time}] [{message.channel}] {message.author}: "
+                    f"{message.content[:50]}..."
+                )
+                self.metrics.messages_processed.labels(topic="discord-messages", status="success").inc()
+            else:
+                self.metrics.messages_processed.labels(topic="discord-messages", status="error").inc()
+
+            self.metrics.processing_latency.labels(topic="discord-messages").observe(time.time() - start_time)
 
             # Check for trigger phrase
             if any(phrase.lower() in message.content.lower() for phrase in self.TRIGGER_PHRASE):
@@ -149,8 +170,12 @@ class DiscordRTFMBot:
                         "context": {}
                     }
 
-                    self.kafka_producer.send_bot_query(query_data)
-                    logger.info(f"Sent query to Kafka: {question}")
+                    q_success = self.kafka_producer.send_bot_query(query_data)
+                    if q_success:
+                        logger.info(f"Sent query to Kafka: {question}")
+                        self.metrics.messages_processed.labels(topic="bot-queries", status="success").inc()
+                    else:
+                        self.metrics.messages_processed.labels(topic="bot-queries", status="error").inc()
 
                 else:
                     await message.channel.send(
@@ -159,6 +184,10 @@ class DiscordRTFMBot:
 
         except Exception as e:
             logger.error(f"Error processing message: {e}", exc_info=True)
+            self.metrics.errors.labels(type="message_processing").inc()
+            
+            # Send to DLQ
+            self.kafka_producer.send_to_dlq("discord-messages-inbound", {"content": message.content}, str(e))
 
 
     def run(self):
@@ -179,4 +208,3 @@ if __name__ == "__main__":
 
     bot = DiscordRTFMBot(BOT_TOKEN, KAFKA_BOOTSTRAP_SERVERS)
     bot.run()
-
