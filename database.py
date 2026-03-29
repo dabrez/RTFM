@@ -120,14 +120,23 @@ class CacheManager:
 class Database:
     def __init__(self, persist_directory=None, model_name="BAAI/bge-small-en-v1.5"):
         import chromadb
+        self.embedding_fn = None
+        
         try:
             # Check if fastembed is installed first
             import fastembed
             from chromadb.utils.embedding_functions import FastEmbedEmbeddingFunction
+            
+            # Initialize embedding function
+            # This may trigger a download on first run
+            logger.info(f"Initializing FastEmbed with model: {model_name}")
+            self.embedding_fn = FastEmbedEmbeddingFunction(model_name=model_name)
+            logger.info("FastEmbed initialized successfully")
+            
         except ImportError as e:
-            logger.error(f"FastEmbed integration error: {e}. Make sure 'fastembed' is installed and your system has necessary libraries (libgomp1).")
-            # Fallback to default if possible or raise
-            raise
+            logger.error(f"FastEmbed not installed: {e}. Semantic search will be disabled.")
+        except Exception as e:
+            logger.error(f"Failed to initialize FastEmbed model '{model_name}': {e}. Semantic search will be disabled.")
 
         # Default persist directory
         if persist_directory is None:
@@ -144,17 +153,19 @@ class Database:
         # Initialize Chroma client
         self.client = chromadb.PersistentClient(path=persist_directory)
         
-        # Initialize embedding function
-        # We use FastEmbedEmbeddingFunction from chromadb.utils.embedding_functions
-        self.embedding_fn = FastEmbedEmbeddingFunction(model_name=model_name)
-        
         # Get or create collection
+        # Note: If embedding_fn is None, Chroma will use its default (which also requires sentence-transformers)
+        # We explicitly pass it to avoid surprises
         self.collection = self.client.get_or_create_collection(
             name="messages",
             embedding_function=self.embedding_fn
         )
 
     def add_message(self, content, username, guild_id, date):
+        if not self.embedding_fn:
+            logger.warning("Attempted to add message but embedding function is not initialized.")
+            return
+
         # Generate a unique ID for the message
         import uuid
         msg_id = str(uuid.uuid4())
@@ -165,22 +176,33 @@ class Database:
             "date": date
         }
         
-        self.collection.add(
-            documents=[content],
-            metadatas=[metadata],
-            ids=[msg_id]
-        )
+        try:
+            self.collection.add(
+                documents=[content],
+                metadatas=[metadata],
+                ids=[msg_id]
+            )
+        except Exception as e:
+            logger.error(f"Error adding message to ChromaDB: {e}")
 
     def query(self, question, guild_id, k=50, min_confidence=0.7, max_results=None):
         """
         Perform a semantic search with normalized confidence and guild filtering.
         """
-        # Query ChromaDB directly
-        results = self.collection.query(
-            query_texts=[question],
-            n_results=k,
-            where={"guild_id": guild_id}
-        )
+        if not self.embedding_fn:
+            logger.warning("Attempted to query but embedding function is not initialized.")
+            return []
+
+        try:
+            # Query ChromaDB directly
+            results = self.collection.query(
+                query_texts=[question],
+                n_results=k,
+                where={"guild_id": guild_id}
+            )
+        except Exception as e:
+            logger.error(f"Error querying ChromaDB: {e}")
+            return []
 
         if not results or not results['documents'][0]:
             return []

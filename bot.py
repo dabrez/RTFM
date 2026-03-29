@@ -111,6 +111,10 @@ class DiscordRTFMBot:
             if not self.model:
                 return "AI responses are currently disabled (no API key configured)."
 
+            if not self.db.embedding_fn:
+                logger.warning("Query attempted but embedding function is missing.")
+                return "I'm sorry, I'm having trouble accessing my memory right now (embedding model not loaded). Please try again later or contact the administrator."
+
             query_results = self.db.query(
                 question,
                 guild_id=guild_id,
@@ -180,6 +184,13 @@ if __name__ == "__main__":
     if not BOT_TOKEN:
         logger.error("DISCORD_TOKEN not found in environment variables")
         exit(1)
+
+    # Pre-check FastEmbed (Optional but recommended for early feedback)
+    try:
+        import fastembed
+        logger.info("FastEmbed library found. Model will be loaded on demand.")
+    except ImportError:
+        logger.warning("FastEmbed library not found. Semantic search features will be limited.")
 
     bot = DiscordRTFMBot(BOT_TOKEN, GEMINI_API_KEY)
     bot.run()
