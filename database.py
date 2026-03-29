@@ -1,5 +1,3 @@
-import chromadb
-from chromadb.utils.embedding_functions import FastEmbedEmbeddingFunction
 import redis
 import json
 import psycopg2
@@ -121,6 +119,13 @@ class CacheManager:
 
 class Database:
     def __init__(self, persist_directory=None, model_name="sentence-transformers/all-MiniLM-L6-v2"):
+        import chromadb
+        try:
+            from chromadb.utils.embedding_functions import FastEmbedEmbeddingFunction
+        except ImportError:
+            logger.error("FastEmbedEmbeddingFunction not found in chromadb.utils.embedding_functions. Please update chromadb to 0.4.20 or later.")
+            raise
+
         # Default persist directory
         if persist_directory is None:
             persist_directory = os.getenv("CHROMA_PERSIST_DIR", "./discord_db")

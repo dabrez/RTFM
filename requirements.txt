@@ -12,7 +12,7 @@ python-dotenv==1.0.0
 google-generativeai==0.3.1
 
 # Vector Database
-chromadb==0.4.18
+chromadb==0.4.24
 
 # Embeddings
 fastembed==0.3.6
