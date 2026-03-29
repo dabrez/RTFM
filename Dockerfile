@@ -29,10 +29,6 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Pre-download fastembed model
-ENV FASTEMBED_CACHE_PATH=/app/model_cache
-RUN python -c "from fastembed import TextEmbedding; list(TextEmbedding(model_name='sentence-transformers/all-MiniLM-L6-v2').embed(['hello']))"
-
 # ============================================================================ 
 # Stage 2: Final Image
 # ============================================================================ 
@@ -40,7 +36,8 @@ FROM python:3.11-slim
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    FASTEMBED_CACHE_PATH=/app/model_cache
 
 # Set working directory
 WORKDIR /app
@@ -48,10 +45,6 @@ WORKDIR /app
 # Copy the virtual environment
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
-
-# Copy pre-downloaded model cache
-COPY --from=builder /app/model_cache /app/model_cache
-ENV FASTEMBED_CACHE_PATH=/app/model_cache
 
 # Copy application files
 COPY bot.py .

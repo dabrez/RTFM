@@ -1,5 +1,5 @@
-from langchain_community.vectorstores import Chroma
-from langchain_community.embeddings.fastembed import FastEmbedEmbeddings
+import chromadb
+from chromadb.utils.embedding_functions import FastEmbedEmbeddingFunction
 import redis
 import json
 import psycopg2
@@ -133,70 +133,78 @@ class Database:
             except Exception as e:
                 logger.error(f"Failed to create directory {persist_directory}: {e}")
 
-        # Initialize embeddings
-        self.embeddings = FastEmbedEmbeddings(model_name=model_name)
-        # Initialize Chroma vector database
-        self.vector_db = Chroma(persist_directory=persist_directory, embedding_function=self.embeddings)
-
+        # Initialize Chroma client
+        self.client = chromadb.PersistentClient(path=persist_directory)
+        
+        # Initialize embedding function
+        # We use FastEmbedEmbeddingFunction from chromadb.utils.embedding_functions
+        self.embedding_fn = FastEmbedEmbeddingFunction(model_name=model_name)
+        
+        # Get or create collection
+        self.collection = self.client.get_or_create_collection(
+            name="messages",
+            embedding_function=self.embedding_fn
+        )
 
     def add_message(self, content, username, guild_id, date):
+        # Generate a unique ID for the message
+        import uuid
+        msg_id = str(uuid.uuid4())
+        
         metadata = {
             "username": username,
             "guild_id": guild_id,
             "date": date
         }
-        self.vector_db.add_texts([content], metadatas=[metadata])
-
+        
+        self.collection.add(
+            documents=[content],
+            metadatas=[metadata],
+            ids=[msg_id]
+        )
 
     def query(self, question, guild_id, k=50, min_confidence=0.7, max_results=None):
         """
         Perform a semantic search with normalized confidence and guild filtering.
-
-
-        Args:
-            question (str): Query text.
-            guild_id (str): Discord guild ID to filter by.
-            k (int): Number of top results to retrieve initially.
-            min_confidence (float): Minimum confidence (0-1) to keep a message.
-            max_results (int | None): Maximum number of messages to return.
-
-
-        Returns:
-            List of tuples: (content, metadata, confidence)
         """
-        # Get top-k results with raw scores, filtered by guild_id
-        results_with_scores = self.vector_db.similarity_search_with_score(
-            question, 
-            k=k,
-            filter={"guild_id": guild_id}
+        # Query ChromaDB directly
+        results = self.collection.query(
+            query_texts=[question],
+            n_results=k,
+            where={"guild_id": guild_id}
         )
 
-
-        if not results_with_scores:
+        if not results or not results['documents'][0]:
             return []
 
+        # Extract results
+        documents = results['documents'][0]
+        metadatas = results['metadatas'][0]
+        # Distances: lower is better (more similar)
+        distances = results['distances'][0] if 'distances' in results else [0.0] * len(documents)
 
-        # Extract raw distances/scores
-        scores = [score for _, score in results_with_scores]
-        min_score, max_score = min(scores), max(scores)
-
+        if not distances:
+            return []
 
         # Normalize to confidence 0-1 (higher = more similar)
+        # ChromaDB distances for l2 (default) are squared L2. 
+        # For simplicity, we'll use a relative normalization within the results
+        min_dist, max_dist = min(distances), max(distances)
+        
         normalized_results = []
-        for doc, score in results_with_scores:
-            if max_score - min_score == 0:
-                confidence = 1.0  # avoid divide by zero
+        for doc, meta, dist in zip(documents, metadatas, distances):
+            if max_dist - min_dist == 0:
+                confidence = 1.0
             else:
-                confidence = 1 - (score - min_score) / (max_score - min_score)
+                confidence = 1 - (dist - min_dist) / (max_dist - min_dist)
+            
             if confidence >= min_confidence:
-                normalized_results.append((doc.page_content, doc.metadata, confidence))
+                normalized_results.append((doc, meta, confidence))
 
+        # Sort by confidence descending
+        normalized_results.sort(key=lambda x: x[2], reverse=True)
 
-
-
-        # Optionally limit max results
         if max_results:
             normalized_results = normalized_results[:max_results]
-
 
         return normalized_results

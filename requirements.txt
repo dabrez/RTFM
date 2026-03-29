@@ -1,5 +1,5 @@
 # ============================================================================
-# RTFM Discord Bot - Python Dependencies (Simplified)
+# RTFM Discord Bot - Python Dependencies (Optimized)
 # ============================================================================
 
 # Discord Bot
@@ -11,15 +11,11 @@ python-dotenv==1.0.0
 # Google Gemini API
 google-generativeai==0.3.1
 
-# LangChain for Vector DB
-langchain==0.1.0
-langchain-community==0.0.13
-
 # Vector Database
 chromadb==0.4.18
 
 # Embeddings
-fastembed==0.2.0
+fastembed==0.3.6
 
 # Required ML Dependencies
 numpy==1.26.2
