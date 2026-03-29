@@ -120,22 +120,31 @@ class CacheManager:
 class Database:
     def __init__(self, persist_directory=None, model_name="BAAI/bge-small-en-v1.5"):
         import chromadb
+        
+        # We define a custom embedding function to avoid importing from 
+        # chromadb.utils.embedding_functions, which can cause issues with 
+        # missing dependencies or version mismatches.
+        class CustomFastEmbedEmbeddingFunction:
+            def __init__(self, model_name):
+                try:
+                    from fastembed import TextEmbedding
+                    self.model = TextEmbedding(model_name=model_name)
+                except ImportError as e:
+                    logger.error(f"FastEmbed not installed: {e}")
+                    raise ImportError(f"FastEmbed not installed: {e}")
+
+            def __call__(self, input):
+                # input is a list of strings
+                return [e.tolist() for e in self.model.embed(input)]
+
         self.embedding_fn = None
         
         try:
-            # Check if fastembed is installed first
-            import fastembed
-            from chromadb.utils.embedding_functions import FastEmbedEmbeddingFunction
-            
-            # Initialize embedding function
-            # This may trigger a download on first run
-            logger.info(f"Initializing FastEmbed with model: {model_name}")
-            self.embedding_fn = FastEmbedEmbeddingFunction(model_name=model_name)
+            # Initialize custom embedding function
+            logger.info(f"Initializing Custom FastEmbed with model: {model_name}")
+            self.embedding_fn = CustomFastEmbedEmbeddingFunction(model_name=model_name)
             logger.info("FastEmbed initialized successfully")
             
-        except ImportError as e:
-            logger.error(f"FastEmbed not installed: {e}")
-            raise RuntimeError(f"FastEmbed not installed: {e}")
         except Exception as e:
             logger.error(f"Failed to initialize FastEmbed model '{model_name}': {e}")
             raise RuntimeError(f"Failed to initialize FastEmbed model '{model_name}': {e}")
@@ -156,8 +165,6 @@ class Database:
         self.client = chromadb.PersistentClient(path=persist_directory)
         
         # Get or create collection
-        # Note: If embedding_fn is None, Chroma will use its default (which also requires sentence-transformers)
-        # We explicitly pass it to avoid surprises
         self.collection = self.client.get_or_create_collection(
             name="messages",
             embedding_function=self.embedding_fn
