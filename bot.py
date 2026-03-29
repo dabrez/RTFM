@@ -144,10 +144,9 @@ Please provide a helpful and accurate response based on the information availabl
             response = await loop.run_in_executor(
                 None,
                 lambda: self.circuit_breaker.call(
-                    self.model.generate_content, 
+                    self.model.generate_content,
                     prompt,
-                    request_options={"timeout": 30},
-                    retry=None
+                    request_options={"timeout": 30, "retry": None}
                 )
             )
             response_text = response.text
