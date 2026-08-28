@@ -11,6 +11,7 @@ import google.generativeai as genai
 
 from database import Database, PostgresDatabase, CacheManager
 from utils import CircuitBreaker
+from source_sync import SourceSyncManager
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,7 +31,9 @@ class DiscordRTFMBot:
         self.db = Database()
         self.postgres = PostgresDatabase()
         self.cache = CacheManager()
-        
+        self.source_sync = SourceSyncManager(self.db, self.postgres)
+        self.source_sync_interval = int(os.getenv("SOURCE_SYNC_INTERVAL_SECONDS", "900"))
+
         # Initialize Gemini
         if gemini_api_key:
             genai.configure(api_key=gemini_api_key)
@@ -51,6 +54,18 @@ class DiscordRTFMBot:
 
     async def on_ready(self):
         logger.info(f'Logged in as {self.client.user}')
+        if not hasattr(self, "_source_sync_task") or self._source_sync_task.done():
+            self._source_sync_task = asyncio.create_task(self._source_sync_loop())
+
+    async def _source_sync_loop(self):
+        """Periodically pull configured external sources (Notion, etc.) into the message store."""
+        loop = asyncio.get_event_loop()
+        while True:
+            try:
+                await loop.run_in_executor(None, self.source_sync.sync_all)
+            except Exception as e:
+                logger.error(f"Source sync loop error: {e}", exc_info=True)
+            await asyncio.sleep(self.source_sync_interval)
 
     async def on_message(self, message):
         if message.author == self.client.user:

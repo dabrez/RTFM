@@ -68,6 +68,84 @@ class PostgresDatabase:
             except Exception:
                 pass
 
+            # Per-guild, per-source connector configuration. `config` holds
+            # whatever fields that source's connector declares (tokens,
+            # database/space IDs, etc.) as JSON so new connectors don't need
+            # schema changes.
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS source_config (
+                    guild_id VARCHAR(50) NOT NULL,
+                    source_name VARCHAR(50) NOT NULL,
+                    config JSONB NOT NULL,
+                    last_synced_at TIMESTAMP,
+                    enabled BOOLEAN DEFAULT TRUE,
+                    PRIMARY KEY (guild_id, source_name)
+                )
+            """)
+
+    def get_source_configs(self, source_name=None):
+        """Return enabled source configs as a list of dicts, optionally
+        filtered to a single source_name."""
+        conn = self._get_conn()
+        if not conn:
+            return []
+
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            if source_name:
+                cur.execute(
+                    "SELECT guild_id, source_name, config, last_synced_at "
+                    "FROM source_config WHERE enabled = TRUE AND source_name = %s",
+                    (source_name,)
+                )
+            else:
+                cur.execute(
+                    "SELECT guild_id, source_name, config, last_synced_at "
+                    "FROM source_config WHERE enabled = TRUE"
+                )
+            return cur.fetchall()
+
+    def get_guild_source_configs(self, guild_id):
+        """Return all configured sources (enabled or not) for one guild."""
+        conn = self._get_conn()
+        if not conn:
+            return []
+
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT guild_id, source_name, config, last_synced_at, enabled "
+                "FROM source_config WHERE guild_id = %s",
+                (guild_id,)
+            )
+            return cur.fetchall()
+
+    def upsert_source_config(self, guild_id, source_name, config: dict):
+        conn = self._get_conn()
+        if not conn:
+            return
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO source_config (guild_id, source_name, config)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (guild_id, source_name) DO UPDATE SET
+                    config = EXCLUDED.config,
+                    enabled = TRUE
+                """,
+                (guild_id, source_name, json.dumps(config))
+            )
+
+    def update_source_last_synced(self, guild_id, source_name, synced_at):
+        conn = self._get_conn()
+        if not conn:
+            return
+
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE source_config SET last_synced_at = %s WHERE guild_id = %s AND source_name = %s",
+                (synced_at, guild_id, source_name)
+            )
+
     def log_query(self, query_id, question, response, username, user_id, guild_id, channel_id):
         conn = self._get_conn()
         if not conn:
@@ -170,23 +248,25 @@ class Database:
             embedding_function=self.embedding_fn
         )
 
-    def add_message(self, content, username, guild_id, date):
+    def add_message(self, content, username, guild_id, date, source="discord", doc_id=None):
         if not self.embedding_fn:
             logger.warning("Attempted to add message but embedding function is not initialized.")
             return
 
-        # Generate a unique ID for the message
+        # Generate a unique ID for the message, or use a caller-provided stable id
+        # (e.g. a Notion page id) so re-syncing the same document updates it in place.
         import uuid
-        msg_id = str(uuid.uuid4())
-        
+        msg_id = doc_id or str(uuid.uuid4())
+
         metadata = {
             "username": username,
             "guild_id": guild_id,
-            "date": date
+            "date": date,
+            "source": source
         }
-        
+
         try:
-            self.collection.add(
+            self.collection.upsert(
                 documents=[content],
                 metadatas=[metadata],
                 ids=[msg_id]

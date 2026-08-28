@@ -11,6 +11,7 @@ import sys
 # Add parent directory to path to import Database and PostgresDatabase
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from database import PostgresDatabase
+from sources.registry import CONNECTORS
 
 load_dotenv()
 
@@ -104,19 +105,24 @@ async def guilds(request: Request):
     guilds = request.session.get("guilds", [])
     return templates.TemplateResponse("guilds.html", {"request": request, "user": user, "guilds": guilds})
 
-@app.get("/guild/{guild_id}", response_class=HTMLResponse)
-async def guild_detail(request: Request, guild_id: str):
+def _require_guild_access(request: Request, guild_id: str):
     user = request.session.get("user")
     if not user:
-        return RedirectResponse("/login")
+        return None, RedirectResponse("/login")
 
-    # Verify user manages this guild
     user_guilds = request.session.get("guilds", [])
     if not any(g["id"] == guild_id for g in user_guilds):
         raise HTTPException(status_code=403, detail="Unauthorized: You do not manage this server.")
 
+    return user, None
+
+@app.get("/guild/{guild_id}", response_class=HTMLResponse)
+async def guild_detail(request: Request, guild_id: str):
+    user, redirect = _require_guild_access(request, guild_id)
+    if redirect:
+        return redirect
+
     # Fetch query history from database for this guild
-    # We'll need a new method in PostgresDatabase for this
     conn = postgres._get_conn()
     history = []
     if conn:
@@ -134,12 +140,52 @@ async def guild_detail(request: Request, guild_id: str):
                     "timestamp": row[3].strftime("%Y-%m-%d %H:%M:%S")
                 })
 
+    # Build a source_name -> config row map, then present every registered
+    # connector (configured or not) so admins can see what's available.
+    existing_by_source = {row["source_name"]: row for row in postgres.get_guild_source_configs(guild_id)}
+    sources = []
+    for source_name, connector in CONNECTORS.items():
+        existing = existing_by_source.get(source_name)
+        sources.append({
+            "source_name": source_name,
+            "display_name": connector.display_name,
+            "config_fields": connector.config_fields,
+            "configured": existing is not None,
+            "enabled": existing["enabled"] if existing else False,
+            "last_synced_at": (
+                existing["last_synced_at"].strftime("%Y-%m-%d %H:%M:%S")
+                if existing and existing["last_synced_at"] else "Never"
+            ) if existing else None
+        })
+
     return templates.TemplateResponse("guild_detail.html", {
-        "request": request, 
-        "user": user, 
+        "request": request,
+        "user": user,
         "guild_id": guild_id,
-        "history": history
+        "history": history,
+        "sources": sources
     })
+
+@app.post("/guild/{guild_id}/source/{source_name}")
+async def set_source_config(request: Request, guild_id: str, source_name: str):
+    _, redirect = _require_guild_access(request, guild_id)
+    if redirect:
+        return redirect
+
+    connector = CONNECTORS.get(source_name)
+    if not connector:
+        raise HTTPException(status_code=404, detail=f"Unknown source '{source_name}'")
+
+    form = await request.form()
+    config = {}
+    for field in connector.config_fields:
+        value = form.get(field.name, "")
+        if field.required and not value:
+            raise HTTPException(status_code=400, detail=f"Missing required field '{field.label}'")
+        config[field.name] = value
+
+    postgres.upsert_source_config(guild_id, source_name, config)
+    return RedirectResponse(f"/guild/{guild_id}", status_code=status.HTTP_303_SEE_OTHER)
 
 @app.get("/logout")
 async def logout(request: Request):
